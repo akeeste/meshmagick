@@ -557,13 +557,19 @@ class Hydrostatics(object):
         #  que ses donnees
 
         # FIXME: on ne devrait recouper le maillage que si ce dernier a ete modifie !!!
-        try:
-            clipper = self.hs_data['clipper']
-            clipped_mesh = clipper.clipped_mesh
-        except KeyError:
-            clipper = MeshClipper(self.mesh, assert_closed_boundaries=True, verbose=False)
-            self.hs_data['clipper'] = clipper
-            clipped_mesh = clipper.clipped_mesh
+        
+        # Check if mesh is converged. Avoids creating a clipped mesh with no points.
+        submerged = self.mesh.axis_aligned_bbox[5] < 0
+        if submerged:
+            clipped_mesh = self.mesh
+        else:
+            try:
+                clipper = self.hs_data['clipper']
+                clipped_mesh = clipper.clipped_mesh
+            except KeyError:
+                clipper = MeshClipper(self.mesh, assert_closed_boundaries=True, verbose=False)
+                self.hs_data['clipper'] = clipper
+                clipped_mesh = clipper.clipped_mesh
 
         # Retrieving faces properties for the clipped mesh
         areas = clipped_mesh.faces_areas
@@ -594,39 +600,43 @@ class Hydrostatics(object):
         ymin = []
         ymax = []
 
-        polygons = clipper.closed_polygons
-        for polygon in polygons:
-            polyverts = clipper.clipped_crown_mesh.vertices[polygon]
-
-            # TODO: voir si on conserve ce test...
-            if np.any(np.fabs(polyverts[:, 2]) > 1e-3):
-                print('The intersection polygon is not on the plane z=0')
-
-            xi, yi = polyverts[0, :2]
-            for (xii, yii) in polyverts[1:, :2]:
-                dx = xii - xi
-                dy = yii - yi
-                px = xi + xii
-                py = yi + yii
-                # a = xi * xi + xii * xii
-
-                sigma0 += dy * px
-                sigma1 += dy * (px * px - xi * xii)
-                sigma2 += dx * (py * py - yi * yii)
-                # sigma3 += dy * (py * a + 2 * px * (xi * yi + xii * yii))
-                sigma3 += dy * (py * px * px + yi * xi * xi + yii * xii * xii)
-                sigma4 += dy * (xi * xi + xii * xii) * px
-                sigma5 += dx * (yi * yi + yii * yii) * py
-
-                xi, yi = xii, yii
-
-            xmin.append(polyverts[:, 0].min())
-            xmax.append(polyverts[:, 0].max())
-            ymin.append(polyverts[:, 1].min())
-            ymax.append(polyverts[:, 1].max())
-
-        minx, maxx = [min(xmin), max(xmax)]
-        miny, maxy = [min(ymin), max(ymax)]
+        if submerged:
+            minx, maxx, miny, maxy, minz, maxz = clipped_mesh.axis_aligned_bbox
+        else:
+            polygons = clipper.closed_polygons
+            for polygon in polygons:
+                polyverts = clipper.clipped_crown_mesh.vertices[polygon]
+    
+                # TODO: voir si on conserve ce test...
+                if np.any(np.fabs(polyverts[:, 2]) > 1e-3):
+                    print('The intersection polygon is not on the plane z=0')
+    
+                xi, yi = polyverts[0, :2]
+                for (xii, yii) in polyverts[1:, :2]:
+                    dx = xii - xi
+                    dy = yii - yi
+                    px = xi + xii
+                    py = yi + yii
+                    # a = xi * xi + xii * xii
+    
+                    sigma0 += dy * px
+                    sigma1 += dy * (px * px - xi * xii)
+                    sigma2 += dx * (py * py - yi * yii)
+                    # sigma3 += dy * (py * a + 2 * px * (xi * yi + xii * yii))
+                    sigma3 += dy * (py * px * px + yi * xi * xi + yii * xii * xii)
+                    sigma4 += dy * (xi * xi + xii * xii) * px
+                    sigma5 += dx * (yi * yi + yii * yii) * py
+    
+                    xi, yi = xii, yii
+    
+                xmin.append(polyverts[:, 0].min())
+                xmax.append(polyverts[:, 0].max())
+                ymin.append(polyverts[:, 1].min())
+                ymax.append(polyverts[:, 1].max())
+    
+            minx, maxx = [min(xmin), max(xmax)]
+            miny, maxy = [min(ymin), max(ymax)]
+        
 
         sigma0 /= 2
         sigma1 /= 6
@@ -667,8 +677,12 @@ class Hydrostatics(object):
         stiffness_matrix[np.fabs(stiffness_matrix) < eps] = 0.
 
         # Flotation center F:
-        x_f = -s35 / s33
-        y_f = s34 / s33
+        if submerged:
+            x_f = 0.0
+            y_f = 0.0
+        else: 
+            x_f = -s35 / s33
+            y_f = s34 / s33
         # TODO: ajouter xf et yf dans le rapport hydro !!
         
         xmin, xmax, ymin, ymax, zmin, zmax = clipped_mesh.axis_aligned_bbox
